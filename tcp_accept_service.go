@@ -14,7 +14,7 @@ type TcpAcceptService struct {
 	wg        *sync.WaitGroup
 }
 
-func TcpAcceptor(netType string, localAddr string, onConnect TcpAcceptCallback) *TcpAcceptService {
+func CreateTcpAcceptor(netType string, localAddr string, onConnect TcpAcceptCallback) *TcpAcceptService {
 	service := &TcpAcceptService{
 		listener:  nil,
 		onConnect: onConnect,
