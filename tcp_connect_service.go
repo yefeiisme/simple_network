@@ -1,4 +1,4 @@
-package simple_netowrk
+package simple_network
 
 import (
 	"net"

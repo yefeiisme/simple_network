@@ -1,4 +1,4 @@
-package simple_netowrk
+package simple_network
 
 type ConnSession interface {
 	IsRunning() bool
