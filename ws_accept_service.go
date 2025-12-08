@@ -65,7 +65,7 @@ func StartupWss(addr string, onConnect AcceptCallback, key string, pem string) {
 	go func() {
 		err := http.ListenAndServeTLS(addr, pem, key, nil)
 		if err != nil {
-			log.Fatal("ListenAndServeTLS failed:", err)
+			log.Error("ListenAndServeTLS failed:", err)
 		}
 	}()
 }
