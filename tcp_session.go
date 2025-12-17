@@ -5,6 +5,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"io"
 	"net"
+	"runtime/debug"
 	"time"
 	"unsafe"
 )
@@ -103,6 +104,10 @@ func (s *TcpSession) run() {
 
 func (s *TcpSession) recvGoroutine() {
 	defer func() {
+		if err := recover(); err != nil {
+			log.Error(err, string(debug.Stack()))
+		}
+
 		log.Debug("receive routine exit")
 
 		s.internalStopChan <- struct{}{}
@@ -141,6 +146,10 @@ func (s *TcpSession) recvGoroutine() {
 
 func (s *TcpSession) sendGoroutine() {
 	defer func() {
+		if err := recover(); err != nil {
+			log.Error(err, string(debug.Stack()))
+		}
+
 		log.Debug("send routine exit")
 
 		s.internalStopChan <- struct{}{}
