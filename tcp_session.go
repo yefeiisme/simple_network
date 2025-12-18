@@ -6,8 +6,14 @@ import (
 	"io"
 	"net"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 	"unsafe"
+)
+
+const (
+	TcpSessionStop = iota
+	TcpSessionRunning
 )
 
 type createPackFunc = func() []byte
@@ -20,8 +26,8 @@ type TcpSession struct {
 	outBuffer        chan []byte
 	externalStopChan chan struct{} // 外部发起的stop
 	internalStopChan chan struct{} // recv或者send协议导致的stop
+	running          uint32        // 连接状态
 	packHeadSize     uint8
-	running          bool // 连接状态
 }
 
 func CreateTcpSession(conn net.Conn, maxInPack int, maxOutPack int, packHead any) ConnSession {
@@ -29,7 +35,7 @@ func CreateTcpSession(conn net.Conn, maxInPack int, maxOutPack int, packHead any
 		conn:             conn,
 		inBuffer:         make(chan []byte, maxInPack),
 		outBuffer:        make(chan []byte, maxOutPack),
-		running:          true,
+		running:          TcpSessionRunning,
 		externalStopChan: make(chan struct{}),
 		internalStopChan: make(chan struct{}, 2),
 	}
@@ -85,7 +91,6 @@ func (s *TcpSession) run() {
 
 	select {
 	case <-s.externalStopChan:
-		s.running = false
 		s.conn.Close()
 
 		// 等待recv和send协程退出
@@ -93,7 +98,8 @@ func (s *TcpSession) run() {
 		<-s.internalStopChan
 		break
 	case <-s.internalStopChan:
-		s.running = false
+		atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop)
+
 		s.conn.Close()
 
 		// 等待另一个协程退出
@@ -113,7 +119,7 @@ func (s *TcpSession) recvGoroutine() {
 		s.internalStopChan <- struct{}{}
 	}()
 
-	for s.running {
+	for TcpSessionRunning == s.running {
 		if _, err := io.ReadFull(s.conn, s.headBuffer); nil != err {
 			if io.EOF == err {
 				log.Error("connection has been closed by client")
@@ -155,7 +161,15 @@ func (s *TcpSession) sendGoroutine() {
 		s.internalStopChan <- struct{}{}
 	}()
 
-	for s.running {
+	//for msg := range s.outBuffer {
+	//	if _, err := s.conn.Write(msg); nil != err {
+	//		//if err := binary.Write(s.conn, binary.LittleEndian, msg); nil != err {
+	//		log.Error(err)
+	//		return
+	//	}
+	//}
+
+	for TcpSessionRunning == s.running {
 		select {
 		case msg := <-s.outBuffer:
 			// 发送数据内容
@@ -172,13 +186,12 @@ func (s *TcpSession) sendGoroutine() {
 }
 
 func (s *TcpSession) IsRunning() bool {
-	return s.running
+	return TcpSessionRunning == s.running
 }
 
 // 这个函数只能被外部的业务逻辑层调用，用于告知Run协程：外部已经不再对此conn作任何的调用了
 func (s *TcpSession) Stop() {
-	if s.running {
-		s.running = false
+	if atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop) {
 		s.externalStopChan <- struct{}{}
 	}
 }
