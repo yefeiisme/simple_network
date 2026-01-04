@@ -119,7 +119,7 @@ func (s *TcpSession) recvGoroutine() {
 		s.internalStopChan <- struct{}{}
 	}()
 
-	for TcpSessionRunning == s.running {
+	for {
 		if _, err := io.ReadFull(s.conn, s.headBuffer); nil != err {
 			if io.EOF == err {
 				log.Error("connection has been closed by client")
