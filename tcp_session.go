@@ -1,6 +1,7 @@
 package simple_network
 
 import (
+	"context"
 	"encoding/binary"
 	log "github.com/sirupsen/logrus"
 	"io"
@@ -20,6 +21,8 @@ type createPackFunc = func() []byte
 type TcpSession struct {
 	conn             net.Conn
 	packFunction     createPackFunc
+	ctx              context.Context
+	cancel           context.CancelFunc
 	headBuffer       []byte
 	inBuffer         chan []byte
 	outBuffer        chan []byte
@@ -30,8 +33,11 @@ type TcpSession struct {
 }
 
 func CreateTcpSession(conn net.Conn, maxInPack int, maxOutPack int, packHead any) ConnSession {
+	ctx, cancel := context.WithCancel(context.Background())
 	var session = &TcpSession{
 		conn:             conn,
+		ctx:              ctx,
+		cancel:           cancel,
 		inBuffer:         make(chan []byte, maxInPack),
 		outBuffer:        make(chan []byte, maxOutPack),
 		running:          TcpSessionRunning,
@@ -88,12 +94,11 @@ func (s *TcpSession) run() {
 	go s.recvGoroutine()
 	go s.sendGoroutine()
 
+	// 等待第一个协程退出
 	<-s.internalStopChan
 
-	if atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop) {
-		s.conn.Close()
-		close(s.outBuffer)
-	}
+	// 尝试改变状态，如果能改变，就关闭conn和chan，触发recv、send协程退出，如果不能，则是外部调用了stop
+	s.Stop()
 
 	// 等待另一个协程退出
 	<-s.internalStopChan
@@ -137,8 +142,20 @@ func (s *TcpSession) recvGoroutine() {
 			return
 		}
 
-		// todo 这里是否要修改为select模式，以解决接收的包满导致的阻塞？
-		s.inBuffer <- pack
+		// 这里是否要修改为select模式，以解决接收的包满导致的阻塞
+		//s.inBuffer <- pack
+
+		// 非阻塞放入队列
+		select {
+		case s.inBuffer <- pack:
+			// 成功
+		case <-s.ctx.Done():
+			// 连接已停止
+			return
+		default:
+			// 队列满，丢弃数据包
+			log.Warn("inBuffer full, dropping packet from:", s.conn.RemoteAddr())
+		}
 	}
 }
 
@@ -168,6 +185,7 @@ func (s *TcpSession) IsRunning() bool {
 // 这个函数只能被外部的业务逻辑层调用，用于告知Run协程：外部已经不再对此conn作任何的调用了
 func (s *TcpSession) Stop() {
 	if atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop) {
+		s.cancel() // 先取消context
 		s.conn.Close()
 		close(s.outBuffer)
 	}
@@ -182,6 +200,8 @@ func (s *TcpSession) GetAddr() string {
 
 func (s *TcpSession) GetPack() []byte {
 	select {
+	//case <-s.ctx.Done(): // 连接已停止
+	//	return nil
 	case pack := <-s.inBuffer:
 		return pack
 	default:
@@ -191,6 +211,8 @@ func (s *TcpSession) GetPack() []byte {
 
 func (s *TcpSession) SendPack(pack []byte) bool {
 	select {
+	case <-s.ctx.Done(): // 连接已停止
+		return false
 	case s.outBuffer <- pack:
 		return true
 	default:
