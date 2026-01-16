@@ -7,7 +7,6 @@ import (
 	"net"
 	"runtime/debug"
 	"sync/atomic"
-	"time"
 	"unsafe"
 )
 
@@ -89,23 +88,15 @@ func (s *TcpSession) run() {
 	go s.recvGoroutine()
 	go s.sendGoroutine()
 
-	select {
-	case <-s.externalStopChan:
+	<-s.internalStopChan
+
+	if atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop) {
 		s.conn.Close()
-
-		// 等待recv和send协程退出
-		<-s.internalStopChan
-		<-s.internalStopChan
-		break
-	case <-s.internalStopChan:
-		atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop)
-
-		s.conn.Close()
-
-		// 等待另一个协程退出
-		<-s.internalStopChan
-		break
+		close(s.outBuffer)
 	}
+
+	// 等待另一个协程退出
+	<-s.internalStopChan
 }
 
 func (s *TcpSession) recvGoroutine() {
@@ -146,6 +137,7 @@ func (s *TcpSession) recvGoroutine() {
 			return
 		}
 
+		// todo 这里是否要修改为select模式，以解决接收的包满导致的阻塞？
 		s.inBuffer <- pack
 	}
 }
@@ -161,38 +153,23 @@ func (s *TcpSession) sendGoroutine() {
 		s.internalStopChan <- struct{}{}
 	}()
 
-	//for msg := range s.outBuffer {
-	//	if _, err := s.conn.Write(msg); nil != err {
-	//		//if err := binary.Write(s.conn, binary.LittleEndian, msg); nil != err {
-	//		log.Error(err)
-	//		return
-	//	}
-	//}
-
-	for TcpSessionRunning == s.running {
-		select {
-		case msg := <-s.outBuffer:
-			// 发送数据内容
-			if _, err := s.conn.Write(msg); nil != err {
-				//if err := binary.Write(s.conn, binary.LittleEndian, msg); nil != err {
-				log.Error(err)
-				return
-			}
-			break
-		default:
-			time.Sleep(time.Millisecond)
+	for msg := range s.outBuffer {
+		if _, err := s.conn.Write(msg); nil != err {
+			log.Error(err)
+			return
 		}
 	}
 }
 
 func (s *TcpSession) IsRunning() bool {
-	return TcpSessionRunning == s.running
+	return atomic.LoadUint32(&s.running) == TcpSessionRunning
 }
 
 // 这个函数只能被外部的业务逻辑层调用，用于告知Run协程：外部已经不再对此conn作任何的调用了
 func (s *TcpSession) Stop() {
 	if atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop) {
-		s.externalStopChan <- struct{}{}
+		s.conn.Close()
+		close(s.outBuffer)
 	}
 }
 
