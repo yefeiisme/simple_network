@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	log "github.com/sirupsen/logrus"
 	"io"
+	"math"
 	"net"
 	"runtime/debug"
 	"sync/atomic"
@@ -29,10 +30,11 @@ type TcpSession struct {
 	externalStopChan chan struct{} // 外部发起的stop
 	internalStopChan chan struct{} // recv或者send协议导致的stop
 	running          uint32        // 连接状态
+	inPackMaxSize    uint32        // 数据包最大的大小
 	packHeadSize     uint8
 }
 
-func CreateTcpSession(conn net.Conn, maxInPack int, maxOutPack int, packHead any) ConnSession {
+func CreateTcpSession(conn net.Conn, maxInPack int, maxOutPack int, inPackMaxSize uint32, packHead any) ConnSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	var session = &TcpSession{
 		conn:             conn,
@@ -43,6 +45,12 @@ func CreateTcpSession(conn net.Conn, maxInPack int, maxOutPack int, packHead any
 		running:          TcpSessionRunning,
 		externalStopChan: make(chan struct{}),
 		internalStopChan: make(chan struct{}, 2),
+	}
+
+	if 0 == inPackMaxSize {
+		session.inPackMaxSize = math.MaxUint32
+	} else {
+		session.inPackMaxSize = inPackMaxSize
 	}
 
 	switch packHead.(type) {
