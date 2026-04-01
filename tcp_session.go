@@ -28,7 +28,7 @@ type TcpSession struct {
 	inBuffer         chan []byte
 	outBuffer        chan []byte
 	externalStopChan chan struct{} // 外部发起的stop
-	internalStopChan chan struct{} // recv或者send协议导致的stop
+	internalStopChan chan struct{} // rcv或者send协议导致的stop
 	running          uint32        // 连接状态
 	inPackMaxSize    uint32        // 数据包最大的大小
 	packHeadSize     uint8
@@ -77,7 +77,7 @@ func CreateTcpSession(conn net.Conn, maxInPack int, maxOutPack int, inPackMaxSiz
 func (s *TcpSession) createUint16HeaderPack() []byte {
 	packLen := binary.LittleEndian.Uint16(s.headBuffer)
 	if packLen < uint16(s.packHeadSize) {
-		log.Error("recv session:", s.conn.RemoteAddr(), " pack head size:", packLen, " less than require header size", s.packHeadSize)
+		log.Error("rcv session:", s.conn.RemoteAddr(), " pack head size:", packLen, " less than require header size", s.packHeadSize)
 		return nil
 	}
 
@@ -89,7 +89,7 @@ func (s *TcpSession) createUint16HeaderPack() []byte {
 func (s *TcpSession) createUint32HeaderPack() []byte {
 	packLen := binary.LittleEndian.Uint32(s.headBuffer)
 	if packLen < uint32(s.packHeadSize) {
-		log.Error("recv session:", s.conn.RemoteAddr(), " pack head size:", packLen, " less than require header size", s.packHeadSize)
+		log.Error("rcv session:", s.conn.RemoteAddr(), " pack head size:", packLen, " less than require header size", s.packHeadSize)
 		return nil
 	}
 
@@ -99,20 +99,20 @@ func (s *TcpSession) createUint32HeaderPack() []byte {
 }
 
 func (s *TcpSession) run() {
-	go s.recvGoroutine()
+	go s.rcvGoroutine()
 	go s.sendGoroutine()
 
 	// 等待第一个协程退出
 	<-s.internalStopChan
 
-	// 尝试改变状态，如果能改变，就关闭conn和chan，触发recv、send协程退出，如果不能，则是外部调用了stop
+	// 尝试改变状态，如果能改变，就关闭conn和chan，触发rcv、send协程退出，如果不能，则是外部调用了stop
 	s.Stop()
 
 	// 等待另一个协程退出
 	<-s.internalStopChan
 }
 
-func (s *TcpSession) recvGoroutine() {
+func (s *TcpSession) rcvGoroutine() {
 	defer func() {
 		if err := recover(); err != nil {
 			log.Error(err, string(debug.Stack()))
@@ -190,7 +190,7 @@ func (s *TcpSession) IsRunning() bool {
 	return atomic.LoadUint32(&s.running) == TcpSessionRunning
 }
 
-// 这个函数只能被外部的业务逻辑层调用，用于告知Run协程：外部已经不再对此conn作任何的调用了
+// Stop 这个函数只能被外部的业务逻辑层调用，用于告知Run协程：外部已经不再对此conn作任何的调用了
 func (s *TcpSession) Stop() {
 	if atomic.CompareAndSwapUint32(&(s.running), TcpSessionRunning, TcpSessionStop) {
 		s.cancel() // 先取消context
